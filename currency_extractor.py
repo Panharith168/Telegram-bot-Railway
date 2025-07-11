@@ -36,8 +36,8 @@ def extract_amounts(text: str) -> Tuple[float, float]:
         # USD patterns - Enhanced for ABA transactions
         usd_patterns = [
             # Standard formats
-            r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',  # $100, $1,000.50
-            r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\$',  # 100$, 1000.50$
+            r'\$([0-9,]+(?:\.\d{1,2})?)',  # $100, $1,000.50
+            r'([0-9,]+(?:\.\d{1,2})?)\$',  # 100$, 1000.50$
             r'\$(\d+(?:\.\d{2})?)',  # $100.50, $100
             r'(\d+(?:\.\d{2})?)\$',  # 100.50$, 100$
             
@@ -62,21 +62,21 @@ def extract_amounts(text: str) -> Tuple[float, float]:
                     amount = float(match.replace(',', ''))
                     if amount > usd_amount:  # Take the largest amount found
                         usd_amount = amount
-                        logger.info(f"Detected ABA USD transaction: ${amount}")
+                        logger.debug(f"Found USD amount: {amount} from pattern {pattern}")
                 except ValueError:
                     continue
         
         # Cambodian Riel patterns
         riel_patterns = [
-            r'៛(\d{1,3}(?:,\d{3})*)',  # ៛25,000
-            r'(\d{1,3}(?:,\d{3})*)៛',  # 25,000៛
+            r'៛([0-9,]+)',  # ៛25,000
+            r'([0-9,]+)៛',  # 25,000៛
             r'៛(\d+)',  # ៛25000
             r'(\d+)៛',  # 25000៛
-            r'(\d{1,3}(?:,\d{3})*)\s+riel',  # 25,000 riel
-            r'(\d{1,3}(?:,\d{3})*)\s+KHR',  # 25,000 KHR
-            r'riel\s+(\d{1,3}(?:,\d{3})*)',  # riel 25,000
-            r'KHR\s+(\d{1,3}(?:,\d{3})*)',  # KHR 25,000
-            r'Received\s+(\d{1,3}(?:,\d{3})*)\s+KHR',  # Received 110,000 KHR
+            r'([0-9,]+)\s+riel',  # 25,000 riel
+            r'([0-9,]+)\s+KHR',  # 25,000 KHR
+            r'riel\s+([0-9,]+)',  # riel 25,000
+            r'KHR\s+([0-9,]+)',  # KHR 25,000
+            r'Received\s+([0-9,]+)\s+KHR',  # Received 110,000 KHR
         ]
         
         for pattern in riel_patterns:
@@ -87,13 +87,13 @@ def extract_amounts(text: str) -> Tuple[float, float]:
                     amount = float(match.replace(',', ''))
                     if amount > riel_amount:  # Take the largest amount found
                         riel_amount = amount
-                        logger.info(f"Detected Riel amount: ៛{amount}")
+                        logger.debug(f"Found Riel amount: {amount} from pattern {pattern}")
                 except ValueError:
                     continue
         
         # Log the extraction result
         if usd_amount > 0 or riel_amount > 0:
-            logger.info(f"Extracted from '{text}': ${usd_amount} USD, ៛{riel_amount} KHR")
+            logger.info(f"Extracted amounts from '{text}' - USD: ${usd_amount:.2f}, KHR: ៛{riel_amount:.2f}")
         
     except Exception as e:
         logger.error(f"Error extracting amounts from '{text}': {e}")
@@ -102,21 +102,7 @@ def extract_amounts(text: str) -> Tuple[float, float]:
 
 def add_payment(user_id: int, username: str, chat_id: int, chat_title: str, 
                message_text: str, usd_amount: float, riel_amount: float) -> int:
-    """
-    Add a payment to the database.
-    
-    Args:
-        user_id (int): Telegram user ID
-        username (str): Telegram username
-        chat_id (int): Telegram chat ID
-        chat_title (str): Chat title
-        message_text (str): Original message text
-        usd_amount (float): USD amount to add
-        riel_amount (float): Riel amount to add
-        
-    Returns:
-        int: Payment ID
-    """
+    """Add a payment to the database."""
     try:
         db = get_database()
         payment_id = db.add_payment(
@@ -135,16 +121,7 @@ def add_payment(user_id: int, username: str, chat_id: int, chat_title: str,
         raise
 
 def get_totals(chat_id: int, period: str = 'today') -> Tuple[float, float]:
-    """
-    Get totals for specified period.
-    
-    Args:
-        chat_id (int): Chat ID to get totals for
-        period (str): 'today', 'week', 'month', or 'year'
-    
-    Returns:
-        Tuple[float, float]: (usd_total, riel_total)
-    """
+    """Get totals for specified period."""
     try:
         db = get_database()
         return db.get_totals(chat_id, period)

@@ -42,7 +42,7 @@ def main():
     try:
         # Test database first
         logger.info("Testing database...")
-        from database_simple import get_database
+        from database import get_database
         db = get_database()
         logger.info("Database connection OK")
         
