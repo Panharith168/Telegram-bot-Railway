@@ -21,17 +21,16 @@ class PaymentDatabase:
         self.setup_database()
     
     def connect(self):
-    """Connect to PostgreSQL database."""
-    try:
-        # Try DATABASE_URL first (Railway style)
-        database_url = os.getenv('DATABASE_URL')
-        if database_url:
-            logger.info("Attempting DATABASE_URL connection...")
-            self.connection = psycopg2.connect(database_url)
-            self.connection.autocommit = True
-            logger.info("✅ Connected to PostgreSQL database via DATABASE_URL")
-        else:
-            # Fallback to individual environment variables...
+        """Connect to PostgreSQL database."""
+        try:
+            # Try DATABASE_URL first (Railway style)
+            database_url = os.getenv('DATABASE_URL')
+            if database_url:
+                self.connection = psycopg2.connect(database_url)
+                self.connection.autocommit = True
+                logger.info("Connected to PostgreSQL database via DATABASE_URL")
+            else:
+                # Fallback to individual environment variables
                 self.connection = psycopg2.connect(
                     host=os.getenv('PGHOST'),
                     database=os.getenv('PGDATABASE'),
