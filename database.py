@@ -1,7 +1,7 @@
 """
-Database operations for payment tracking - SIMPLE RAILWAY VERSION
+Database operations for payment tracking - RAILWAY CRASH FIX
 
-Handles all database operations with simplified Railway connection.
+Handles Railway's specific database connection requirements.
 """
 
 import os
@@ -12,6 +12,7 @@ from datetime import datetime, date
 from typing import List, Dict, Tuple, Optional
 import pandas as pd
 import pytz
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -33,53 +34,58 @@ class PaymentDatabase:
         self.setup_database()
     
     def connect(self):
-        """Connect to PostgreSQL database - Railway optimized."""
+        """Connect to PostgreSQL database - Railway crash fix."""
         try:
-            # Method 1: Direct environment variables (most reliable for Railway)
-            host = os.getenv('PGHOST')
-            database = os.getenv('PGDATABASE') 
-            user = os.getenv('PGUSER')
-            password = os.getenv('PGPASSWORD')
-            port = os.getenv('PGPORT', '5432')
-            
-            if all([host, database, user, password]):
-                logger.info(f"Connecting with individual variables: {host}:{port}")
-                self.connection = psycopg2.connect(
-                    host=host,
-                    database=database,
-                    user=user,
-                    password=password,
-                    port=int(port),
-                    sslmode='require'  # Railway requires SSL
-                )
-                self.connection.autocommit = True
-                logger.info("Successfully connected via individual environment variables")
-                return
-            
-            # Method 2: DATABASE_URL with SSL requirement
+            # Railway specific: Parse DATABASE_URL manually
             database_url = os.getenv('DATABASE_URL')
-            if database_url:
-                # Ensure SSL mode for Railway
-                if '?sslmode=' not in database_url:
-                    database_url += '?sslmode=require'
-                
-                logger.info("Attempting DATABASE_URL connection with SSL")
-                self.connection = psycopg2.connect(database_url)
-                self.connection.autocommit = True
-                logger.info("Successfully connected via DATABASE_URL")
-                return
+            if not database_url:
+                raise Exception("DATABASE_URL not found in environment")
             
-            raise Exception("No valid database credentials found")
+            logger.info(f"Railway DATABASE_URL detected: {database_url[:20]}...")
+            
+            # Parse the URL manually
+            parsed = urlparse(database_url)
+            
+            # Extract connection parameters
+            host = parsed.hostname
+            database = parsed.path[1:]  # Remove leading slash
+            user = parsed.username
+            password = parsed.password
+            port = parsed.port or 5432
+            
+            logger.info(f"Parsed connection: {user}@{host}:{port}/{database}")
+            
+            # Connect with explicit SSL mode for Railway
+            self.connection = psycopg2.connect(
+                host=host,
+                database=database,
+                user=user,
+                password=password,
+                port=port,
+                sslmode='require',  # Railway requires SSL
+                connect_timeout=10
+            )
+            
+            # Set autocommit for Railway compatibility
+            self.connection.autocommit = True
+            
+            logger.info("Railway database connection successful")
             
         except Exception as e:
-            logger.error(f"Database connection failed: {e}")
-            # Log available environment for debugging
-            logger.error(f"PGHOST: {bool(os.getenv('PGHOST'))}")
-            logger.error(f"PGDATABASE: {bool(os.getenv('PGDATABASE'))}")
-            logger.error(f"PGUSER: {bool(os.getenv('PGUSER'))}")
-            logger.error(f"PGPASSWORD: {bool(os.getenv('PGPASSWORD'))}")
-            logger.error(f"DATABASE_URL: {bool(os.getenv('DATABASE_URL'))}")
-            raise
+            logger.error(f"Railway database connection failed: {e}")
+            logger.error(f"DATABASE_URL available: {bool(os.getenv('DATABASE_URL'))}")
+            
+            # Try fallback without SSL for local testing
+            try:
+                if database_url and 'localhost' in database_url:
+                    logger.info("Attempting local fallback connection")
+                    self.connection = psycopg2.connect(database_url)
+                    self.connection.autocommit = True
+                    logger.info("Local fallback connection successful")
+                else:
+                    raise e
+            except:
+                raise e
     
     def setup_database(self):
         """Create tables if they don't exist."""

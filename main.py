@@ -1,14 +1,13 @@
 """
-Telegram Payment Tracking Bot - Railway Fixed Version
+Telegram Payment Tracking Bot - Railway Crash Fix
 
-A bot that tracks payment amounts via manual commands with persistent database storage.
+Fixes the event loop and database connection issues on Railway.
 """
 
 import os
 import sys
 import logging
 import asyncio
-from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -19,7 +18,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout)  # Log to stdout for Railway
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
@@ -31,73 +30,62 @@ def validate_environment():
         logger.error("BOT_TOKEN not found in environment variables")
         return False
     
-    # Check database credentials
     database_url = os.getenv('DATABASE_URL')
-    pghost = os.getenv('PGHOST')
-    
-    if not database_url and not pghost:
-        logger.error("No database credentials found")
+    if not database_url:
+        logger.error("DATABASE_URL not found in environment variables")
         return False
     
     logger.info("Environment validation passed")
     return True
 
-async def health_check():
-    """Simple health check for Railway monitoring."""
+def test_database():
+    """Test database connection."""
     try:
-        # Test database connection
         from database import get_database
         db = get_database()
-        logger.info("Health check passed - database connection OK")
+        logger.info("Database connection test passed")
         return True
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
+        logger.error(f"Database connection test failed: {e}")
         return False
 
 def main():
-    """Main function to initialize and run the Telegram bot."""
-    logger.info("Starting Telegram Payment Tracking Bot")
+    """Main function - Railway crash fix."""
+    logger.info("Starting Telegram Payment Tracking Bot (Railway Fix)")
     
-    # Validate environment
+    # Validate environment first
     if not validate_environment():
-        logger.error("Environment validation failed - exiting")
+        logger.error("Environment validation failed")
+        sys.exit(1)
+    
+    # Test database connection
+    if not test_database():
+        logger.error("Database test failed")
         sys.exit(1)
     
     try:
-        # Import after environment validation
+        # Import bot modules after validation
         from telegram.ext import Application
         from bot_handlers import setup_handlers
         
-        # Get bot token
         bot_token = os.getenv('BOT_TOKEN')
-        logger.info("Initializing Telegram bot application")
+        logger.info("Creating Telegram application")
         
-        # Create application with explicit settings for Railway
-        application = (
-            Application.builder()
-            .token(bot_token)
-            .concurrent_updates(True)
-            .build()
-        )
+        # Create application with Railway-specific settings
+        application = Application.builder().token(bot_token).build()
         
-        # Setup all command handlers
+        # Setup handlers
         setup_handlers(application)
-        logger.info("Bot handlers configured successfully")
+        logger.info("Bot handlers configured")
         
-        # Test database connection before starting
-        logger.info("Testing database connection...")
-        asyncio.run(health_check())
-        
-        # Start the bot
+        # Start bot with Railway-compatible settings
         logger.info("Starting bot polling...")
         application.run_polling(
-            allowed_updates=['message', 'callback_query'],
-            drop_pending_updates=True,  # Clear any pending updates
+            drop_pending_updates=True,
+            allowed_updates=['message'],
             close_loop=False
         )
         
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Bot startup failed: {e}")
         import traceback
@@ -105,4 +93,11 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    # Ensure we have an event loop for Railway
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
     main()
