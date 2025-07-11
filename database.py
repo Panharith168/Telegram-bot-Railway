@@ -95,32 +95,61 @@ class PaymentDatabase:
         return None
     
     def connect(self):
-        """Simple Railway connection."""
+        """Railway database connection with multiple fallback methods."""
         database_url = os.getenv('DATABASE_URL')
         
         if not database_url:
             raise Exception("No DATABASE_URL found")
         
-        logger.info("Connecting to Railway database...")
+        logger.info(f"Connecting to Railway database: {database_url[:50]}...")
         
         try:
-            # Parse URL
-            parsed = urlparse(database_url)
+            # Method 1: Direct URL connection (Railway preferred)
+            try:
+                self.connection = psycopg2.connect(database_url, sslmode='require')
+                self.connection.autocommit = True
+                logger.info("Railway direct connection successful")
+                return
+            except Exception as e1:
+                logger.warning(f"Direct connection failed: {e1}")
             
-            # Simple connection with SSL
-            self.connection = psycopg2.connect(
-                host=parsed.hostname,
-                database=parsed.path[1:],
-                user=parsed.username,
-                password=parsed.password,
-                port=parsed.port or 5432,
-                sslmode='require'
-            )
-            self.connection.autocommit = True
-            logger.info("Railway connection successful")
+            # Method 2: Parse URL components
+            try:
+                parsed = urlparse(database_url)
+                self.connection = psycopg2.connect(
+                    host=parsed.hostname,
+                    database=parsed.path[1:],
+                    user=parsed.username,
+                    password=parsed.password,
+                    port=parsed.port or 5432,
+                    sslmode='require'
+                )
+                self.connection.autocommit = True
+                logger.info("Railway parsed connection successful")
+                return
+            except Exception as e2:
+                logger.warning(f"Parsed connection failed: {e2}")
+            
+            # Method 3: Environment variables (Railway backup)
+            try:
+                self.connection = psycopg2.connect(
+                    host=os.getenv('PGHOST'),
+                    database=os.getenv('PGDATABASE'),
+                    user=os.getenv('PGUSER'),
+                    password=os.getenv('PGPASSWORD'),
+                    port=os.getenv('PGPORT', 5432),
+                    sslmode='require'
+                )
+                self.connection.autocommit = True
+                logger.info("Railway environment connection successful")
+                return
+            except Exception as e3:
+                logger.warning(f"Environment connection failed: {e3}")
+            
+            raise Exception(f"All connection methods failed: {e1}, {e2}, {e3}")
             
         except Exception as e:
-            logger.error(f"Connection failed: {e}")
+            logger.error(f"Database connection completely failed: {e}")
             raise
     
     def setup_database(self):
