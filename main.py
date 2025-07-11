@@ -42,8 +42,8 @@ def main():
     try:
         # Test database first
         logger.info("Testing database...")
-        from database import get_database
-        db = get_database()
+        from database import PaymentDatabase
+        db = PaymentDatabase()
         logger.info("Database connection OK")
         
         # Import and start bot

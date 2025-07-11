@@ -17,6 +17,10 @@ async def add_payment_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     Handle /add command to manually add payment amounts.
     Usage: /add $100 or /add ៛25000 or /add $50 ៛10000
+    
+    Args:
+        update (Update): Telegram update object
+        context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
         # Get user and chat information
@@ -96,6 +100,10 @@ async def add_payment_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def show_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle /total command to display current totals.
+    
+    Args:
+        update (Update): Telegram update object
+        context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
         user_id = update.effective_user.id
@@ -117,6 +125,10 @@ async def show_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle /start command with welcome message.
+    
+    Args:
+        update (Update): Telegram update object
+        context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
         welcome_message = (
@@ -149,6 +161,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle /help command.
+    
+    Args:
+        update (Update): Telegram update object
+        context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
         help_text = (
@@ -181,6 +197,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle /summary command to show detailed daily summary.
+    
+    Args:
+        update (Update): Telegram update object
+        context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
         chat_id = update.effective_chat.id
@@ -318,6 +338,9 @@ async def test_detection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def setup_handlers(app: Application) -> None:
     """
     Setup all command handlers for the bot.
+    
+    Args:
+        app (Application): Telegram application instance
     """
     # Command handlers
     app.add_handler(CommandHandler("start", start_command))
@@ -332,4 +355,4 @@ def setup_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("test", test_detection))
     
     # No automatic message handler - only respond to commands
-    logger.info("All command handlers registered successfully")
+    logger.info("Command handlers setup complete - bot operates in command-only mode")
