@@ -23,17 +23,28 @@ class PaymentDatabase:
     def connect(self):
         """Connect to PostgreSQL database."""
         try:
-            self.connection = psycopg2.connect(
-                host=os.getenv('PGHOST'),
-                database=os.getenv('PGDATABASE'),
-                user=os.getenv('PGUSER'),
-                password=os.getenv('PGPASSWORD'),
-                port=os.getenv('PGPORT')
-            )
-            self.connection.autocommit = True
-            logger.info("Connected to PostgreSQL database")
+            # Try DATABASE_URL first (Railway style)
+            database_url = os.getenv('DATABASE_URL')
+            if database_url:
+                self.connection = psycopg2.connect(database_url)
+                self.connection.autocommit = True
+                logger.info("Connected to PostgreSQL database via DATABASE_URL")
+            else:
+                # Fallback to individual environment variables
+                self.connection = psycopg2.connect(
+                    host=os.getenv('PGHOST'),
+                    database=os.getenv('PGDATABASE'),
+                    user=os.getenv('PGUSER'),
+                    password=os.getenv('PGPASSWORD'),
+                    port=os.getenv('PGPORT')
+                )
+                self.connection.autocommit = True
+                logger.info("Connected to PostgreSQL database via individual variables")
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
+            # Log available environment variables for debugging
+            logger.error(f"DATABASE_URL available: {bool(os.getenv('DATABASE_URL'))}")
+            logger.error(f"PGHOST available: {bool(os.getenv('PGHOST'))}")
             raise
     
     def setup_database(self):
