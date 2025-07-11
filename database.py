@@ -1,5 +1,5 @@
 """
-Database operations for payment tracking
+Database operations for payment tracking - RAILWAY FIXED VERSION
 
 Handles all database operations including payments, totals, and export functionality.
 """
@@ -33,31 +33,62 @@ class PaymentDatabase:
         self.setup_database()
     
     def connect(self):
-        """Connect to PostgreSQL database."""
+        """Connect to PostgreSQL database with improved Railway compatibility."""
         try:
-            # Try DATABASE_URL first (Railway style)
+            # Get DATABASE_URL
             database_url = os.getenv('DATABASE_URL')
-            if database_url:
+            if not database_url:
+                logger.error("DATABASE_URL not found in environment")
+                raise Exception("DATABASE_URL not found")
+            
+            logger.info(f"DATABASE_URL detected: {database_url[:30]}...")
+            
+            # Railway sometimes provides malformed DATABASE_URL, let's clean it
+            if database_url.startswith('postgresql://'):
+                # This is correct format
                 self.connection = psycopg2.connect(database_url)
-                self.connection.autocommit = True
-                logger.info("Connected to PostgreSQL database via DATABASE_URL")
+            elif database_url.startswith('postgres://'):
+                # Convert postgres:// to postgresql://
+                fixed_url = database_url.replace('postgres://', 'postgresql://', 1)
+                logger.info("Converting postgres:// to postgresql://")
+                self.connection = psycopg2.connect(fixed_url)
             else:
-                # Fallback to individual environment variables
+                # Parse individual components from URL
+                logger.info("Parsing DATABASE_URL components manually")
+                # Extract components manually for Railway compatibility
+                from urllib.parse import urlparse
+                parsed = urlparse(database_url)
+                
+                self.connection = psycopg2.connect(
+                    host=parsed.hostname,
+                    database=parsed.path.lstrip('/'),
+                    user=parsed.username,
+                    password=parsed.password,
+                    port=parsed.port or 5432
+                )
+            
+            self.connection.autocommit = True
+            logger.info("Connected to PostgreSQL database successfully")
+            
+        except Exception as e:
+            logger.error(f"Database connection failed: {e}")
+            logger.error(f"DATABASE_URL format: {os.getenv('DATABASE_URL', 'NOT_SET')[:50]}...")
+            
+            # Try fallback connection with individual variables
+            try:
+                logger.info("Attempting fallback connection with individual variables")
                 self.connection = psycopg2.connect(
                     host=os.getenv('PGHOST'),
                     database=os.getenv('PGDATABASE'),
                     user=os.getenv('PGUSER'),
                     password=os.getenv('PGPASSWORD'),
-                    port=os.getenv('PGPORT')
+                    port=os.getenv('PGPORT', 5432)
                 )
                 self.connection.autocommit = True
-                logger.info("Connected to PostgreSQL database via individual variables")
-        except Exception as e:
-            logger.error(f"Database connection failed: {e}")
-            # Log available environment variables for debugging
-            logger.error(f"DATABASE_URL available: {bool(os.getenv('DATABASE_URL'))}")
-            logger.error(f"PGHOST available: {bool(os.getenv('PGHOST'))}")
-            raise
+                logger.info("Connected via fallback method")
+            except Exception as fallback_error:
+                logger.error(f"Fallback connection also failed: {fallback_error}")
+                raise Exception(f"All database connection methods failed: {e}")
     
     def setup_database(self):
         """Create tables if they don't exist."""
@@ -123,28 +154,30 @@ class PaymentDatabase:
         """Get totals for specified period."""
         try:
             with self.connection.cursor() as cursor:
+                cambodia_date = get_cambodia_date()
+                
                 if period == 'today':
                     cursor.execute("""
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
                         WHERE chat_id = %s AND payment_date = %s
-                    """, (chat_id, get_cambodia_date()))
+                    """, (chat_id, cambodia_date))
                 elif period == 'week':
-                    week_start = get_cambodia_date() - pd.Timedelta(days=7)
+                    week_start = cambodia_date - pd.Timedelta(days=7)
                     cursor.execute("""
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
                         WHERE chat_id = %s AND payment_date >= %s
                     """, (chat_id, week_start))
                 elif period == 'month':
-                    month_start = get_cambodia_date().replace(day=1)
+                    month_start = cambodia_date.replace(day=1)
                     cursor.execute("""
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
                         WHERE chat_id = %s AND payment_date >= %s
                     """, (chat_id, month_start))
                 elif period == 'year':
-                    year_start = get_cambodia_date().replace(month=1, day=1)
+                    year_start = cambodia_date.replace(month=1, day=1)
                     cursor.execute("""
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
@@ -152,9 +185,12 @@ class PaymentDatabase:
                     """, (chat_id, year_start))
                 
                 result = cursor.fetchone()
-                return float(result[0]), float(result[1])
+                usd_total, riel_total = float(result[0]), float(result[1])
+                logger.info(f"Retrieved totals for chat {chat_id} ({period}): ${usd_total:.2f} USD, ៛{riel_total:.2f} KHR")
+                return usd_total, riel_total
+                
         except Exception as e:
-            logger.error(f"Failed to get totals: {e}")
+            logger.error(f"Failed to get totals for chat {chat_id}: {e}")
             return 0.0, 0.0
     
     def get_payments_for_export(self, chat_id: int, start_date: date = None, 
