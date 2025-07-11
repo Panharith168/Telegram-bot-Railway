@@ -1,7 +1,7 @@
 """
-Database operations for payment tracking - RAILWAY FIXED VERSION
+Database operations for payment tracking - SIMPLE RAILWAY VERSION
 
-Handles all database operations including payments, totals, and export functionality.
+Handles all database operations with simplified Railway connection.
 """
 
 import os
@@ -33,68 +33,58 @@ class PaymentDatabase:
         self.setup_database()
     
     def connect(self):
-        """Connect to PostgreSQL database with improved Railway compatibility."""
+        """Connect to PostgreSQL database - Railway optimized."""
         try:
-            # Get DATABASE_URL
-            database_url = os.getenv('DATABASE_URL')
-            if not database_url:
-                logger.error("DATABASE_URL not found in environment")
-                raise Exception("DATABASE_URL not found")
+            # Method 1: Direct environment variables (most reliable for Railway)
+            host = os.getenv('PGHOST')
+            database = os.getenv('PGDATABASE') 
+            user = os.getenv('PGUSER')
+            password = os.getenv('PGPASSWORD')
+            port = os.getenv('PGPORT', '5432')
             
-            logger.info(f"DATABASE_URL detected: {database_url[:30]}...")
-            
-            # Railway sometimes provides malformed DATABASE_URL, let's clean it
-            if database_url.startswith('postgresql://'):
-                # This is correct format
-                self.connection = psycopg2.connect(database_url)
-            elif database_url.startswith('postgres://'):
-                # Convert postgres:// to postgresql://
-                fixed_url = database_url.replace('postgres://', 'postgresql://', 1)
-                logger.info("Converting postgres:// to postgresql://")
-                self.connection = psycopg2.connect(fixed_url)
-            else:
-                # Parse individual components from URL
-                logger.info("Parsing DATABASE_URL components manually")
-                # Extract components manually for Railway compatibility
-                from urllib.parse import urlparse
-                parsed = urlparse(database_url)
-                
+            if all([host, database, user, password]):
+                logger.info(f"Connecting with individual variables: {host}:{port}")
                 self.connection = psycopg2.connect(
-                    host=parsed.hostname,
-                    database=parsed.path.lstrip('/'),
-                    user=parsed.username,
-                    password=parsed.password,
-                    port=parsed.port or 5432
+                    host=host,
+                    database=database,
+                    user=user,
+                    password=password,
+                    port=int(port),
+                    sslmode='require'  # Railway requires SSL
                 )
+                self.connection.autocommit = True
+                logger.info("Successfully connected via individual environment variables")
+                return
             
-            self.connection.autocommit = True
-            logger.info("Connected to PostgreSQL database successfully")
+            # Method 2: DATABASE_URL with SSL requirement
+            database_url = os.getenv('DATABASE_URL')
+            if database_url:
+                # Ensure SSL mode for Railway
+                if '?sslmode=' not in database_url:
+                    database_url += '?sslmode=require'
+                
+                logger.info("Attempting DATABASE_URL connection with SSL")
+                self.connection = psycopg2.connect(database_url)
+                self.connection.autocommit = True
+                logger.info("Successfully connected via DATABASE_URL")
+                return
+            
+            raise Exception("No valid database credentials found")
             
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
-            logger.error(f"DATABASE_URL format: {os.getenv('DATABASE_URL', 'NOT_SET')[:50]}...")
-            
-            # Try fallback connection with individual variables
-            try:
-                logger.info("Attempting fallback connection with individual variables")
-                self.connection = psycopg2.connect(
-                    host=os.getenv('PGHOST'),
-                    database=os.getenv('PGDATABASE'),
-                    user=os.getenv('PGUSER'),
-                    password=os.getenv('PGPASSWORD'),
-                    port=os.getenv('PGPORT', 5432)
-                )
-                self.connection.autocommit = True
-                logger.info("Connected via fallback method")
-            except Exception as fallback_error:
-                logger.error(f"Fallback connection also failed: {fallback_error}")
-                raise Exception(f"All database connection methods failed: {e}")
+            # Log available environment for debugging
+            logger.error(f"PGHOST: {bool(os.getenv('PGHOST'))}")
+            logger.error(f"PGDATABASE: {bool(os.getenv('PGDATABASE'))}")
+            logger.error(f"PGUSER: {bool(os.getenv('PGUSER'))}")
+            logger.error(f"PGPASSWORD: {bool(os.getenv('PGPASSWORD'))}")
+            logger.error(f"DATABASE_URL: {bool(os.getenv('DATABASE_URL'))}")
+            raise
     
     def setup_database(self):
         """Create tables if they don't exist."""
         try:
             with self.connection.cursor() as cursor:
-                # Create payments table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS payments (
                         id SERIAL PRIMARY KEY,
@@ -110,21 +100,12 @@ class PaymentDatabase:
                     )
                 """)
                 
-                # Create indexes for better query performance
                 cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_payments_date 
-                    ON payments(payment_date)
-                """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_payments_chat 
+                    CREATE INDEX IF NOT EXISTS idx_payments_chat_date 
                     ON payments(chat_id, payment_date)
                 """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_payments_user 
-                    ON payments(user_id, payment_date)
-                """)
                 
-                logger.info("Database tables created successfully")
+                logger.info("Database tables verified/created successfully")
         except Exception as e:
             logger.error(f"Database setup failed: {e}")
             raise
@@ -144,7 +125,7 @@ class PaymentDatabase:
                       usd_amount, riel_amount, get_cambodia_date()))
                 
                 payment_id = cursor.fetchone()[0]
-                logger.info(f"Added payment {payment_id}: ${usd_amount:.2f} USD, ៛{riel_amount:.2f} KHR")
+                logger.info(f"Payment added: ID {payment_id}, ${usd_amount:.2f} USD, ៛{riel_amount:.2f} KHR")
                 return payment_id
         except Exception as e:
             logger.error(f"Failed to add payment: {e}")
@@ -157,40 +138,47 @@ class PaymentDatabase:
                 cambodia_date = get_cambodia_date()
                 
                 if period == 'today':
-                    cursor.execute("""
+                    query = """
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
                         WHERE chat_id = %s AND payment_date = %s
-                    """, (chat_id, cambodia_date))
+                    """
+                    cursor.execute(query, (chat_id, cambodia_date))
+                    
                 elif period == 'week':
                     week_start = cambodia_date - pd.Timedelta(days=7)
-                    cursor.execute("""
+                    query = """
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
                         WHERE chat_id = %s AND payment_date >= %s
-                    """, (chat_id, week_start))
+                    """
+                    cursor.execute(query, (chat_id, week_start))
+                    
                 elif period == 'month':
                     month_start = cambodia_date.replace(day=1)
-                    cursor.execute("""
+                    query = """
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
                         WHERE chat_id = %s AND payment_date >= %s
-                    """, (chat_id, month_start))
+                    """
+                    cursor.execute(query, (chat_id, month_start))
+                    
                 elif period == 'year':
                     year_start = cambodia_date.replace(month=1, day=1)
-                    cursor.execute("""
+                    query = """
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
                         WHERE chat_id = %s AND payment_date >= %s
-                    """, (chat_id, year_start))
+                    """
+                    cursor.execute(query, (chat_id, year_start))
                 
                 result = cursor.fetchone()
                 usd_total, riel_total = float(result[0]), float(result[1])
-                logger.info(f"Retrieved totals for chat {chat_id} ({period}): ${usd_total:.2f} USD, ៛{riel_total:.2f} KHR")
+                logger.info(f"Totals for chat {chat_id} ({period}): ${usd_total:.2f} USD, ៛{riel_total:.2f} KHR")
                 return usd_total, riel_total
                 
         except Exception as e:
-            logger.error(f"Failed to get totals for chat {chat_id}: {e}")
+            logger.error(f"Failed to get totals for chat {chat_id}, period {period}: {e}")
             return 0.0, 0.0
     
     def get_payments_for_export(self, chat_id: int, start_date: date = None, 
@@ -223,7 +211,6 @@ class PaymentDatabase:
     def export_to_excel(self, chat_id: int, chat_title: str, period: str = 'all') -> str:
         """Export payments to Excel file."""
         try:
-            # Determine date range based on period using Cambodia timezone
             start_date = None
             end_date = get_cambodia_date()
             
@@ -234,28 +221,22 @@ class PaymentDatabase:
             elif period == 'year':
                 start_date = get_cambodia_date().replace(month=1, day=1)
             
-            # Get payment data
             payments = self.get_payments_for_export(chat_id, start_date, end_date)
             
             if not payments:
                 return None
             
-            # Create DataFrame
             df = pd.DataFrame(payments)
             df['usd_amount'] = df['usd_amount'].astype(float)
             df['riel_amount'] = df['riel_amount'].astype(float)
             
-            # Format filename with Cambodia timezone
             timestamp = get_cambodia_datetime().strftime('%Y%m%d_%H%M%S')
             safe_title = "".join(c for c in chat_title if c.isalnum() or c in (' ', '-', '_')).strip()
             filename = f"payments_{safe_title}_{period}_{timestamp}.xlsx"
             
-            # Create Excel file with multiple sheets
             with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-                # Main payments sheet
                 df.to_excel(writer, sheet_name='Payments', index=False)
                 
-                # Summary sheet
                 summary_data = {
                     'Period': [period.title()],
                     'Total USD': [df['usd_amount'].sum()],
@@ -265,13 +246,6 @@ class PaymentDatabase:
                 }
                 summary_df = pd.DataFrame(summary_data)
                 summary_df.to_excel(writer, sheet_name='Summary', index=False)
-                
-                # Daily totals sheet
-                daily_totals = df.groupby('payment_date').agg({
-                    'usd_amount': 'sum',
-                    'riel_amount': 'sum'
-                }).reset_index()
-                daily_totals.to_excel(writer, sheet_name='Daily Totals', index=False)
             
             logger.info(f"Exported {len(payments)} payments to {filename}")
             return filename
@@ -283,14 +257,12 @@ class PaymentDatabase:
         """Get comprehensive statistics."""
         try:
             with self.connection.cursor() as cursor:
-                # Get total counts and amounts
                 cursor.execute("""
                     SELECT COUNT(*), COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                     FROM payments WHERE chat_id = %s
                 """, (chat_id,))
                 total_count, total_usd, total_riel = cursor.fetchone()
                 
-                # Get today's stats
                 cursor.execute("""
                     SELECT COUNT(*), COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                     FROM payments WHERE chat_id = %s AND payment_date = %s
