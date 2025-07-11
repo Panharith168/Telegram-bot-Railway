@@ -239,44 +239,40 @@ class PaymentDatabase:
             
             logger.info(f"Exported {len(payments)} payments to {filename}")
             return filename
-            
         except Exception as e:
-            logger.error(f"Failed to export to Excel: {e}")
+            logger.error(f"Excel export failed: {e}")
             return None
     
     def get_stats(self, chat_id: int) -> Dict:
         """Get comprehensive statistics."""
         try:
             with self.connection.cursor() as cursor:
-                # Overall stats
+                # Get total counts and amounts
                 cursor.execute("""
-                    SELECT COUNT(*) as total_payments,
-                           COALESCE(SUM(usd_amount), 0) as total_usd,
-                           COALESCE(SUM(riel_amount), 0) as total_riel,
-                           MIN(payment_date) as first_payment,
-                           MAX(payment_date) as last_payment
+                    SELECT COUNT(*), COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                     FROM payments WHERE chat_id = %s
                 """, (chat_id,))
+                total_count, total_usd, total_riel = cursor.fetchone()
                 
-                overall = cursor.fetchone()
+                # Get today's stats
+                cursor.execute("""
+                    SELECT COUNT(*), COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
+                    FROM payments WHERE chat_id = %s AND payment_date = %s
+                """, (chat_id, get_cambodia_date()))
+                today_count, today_usd, today_riel = cursor.fetchone()
                 
                 return {
-                    'total_payments': overall[0],
-                    'total_usd': float(overall[1]),
-                    'total_riel': float(overall[2]),
-                    'first_payment': overall[3],
-                    'last_payment': overall[4]
+                    'total_payments': total_count,
+                    'total_usd': float(total_usd),
+                    'total_riel': float(total_riel),
+                    'today_payments': today_count,
+                    'today_usd': float(today_usd),
+                    'today_riel': float(today_riel)
                 }
         except Exception as e:
             logger.error(f"Failed to get stats: {e}")
             return {}
 
-# Global database instance
-db = None
-
 def get_database():
     """Get database instance."""
-    global db
-    if db is None:
-        db = PaymentDatabase()
-    return db
+    return PaymentDatabase()

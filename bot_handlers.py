@@ -5,12 +5,9 @@ Contains all the handlers for processing messages and commands.
 """
 
 import logging
-from datetime import datetime
 from telegram import Update
-from telegram.ext import (
-    Application, MessageHandler, CommandHandler, 
-    ContextTypes, filters
-)
+from telegram.ext import ContextTypes, Application, CommandHandler
+from telegram.constants import ParseMode
 
 from currency_extractor import extract_amounts, add_payment, format_totals, export_payments
 
@@ -26,15 +23,15 @@ async def add_payment_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
-        if not update.message:
-            return
-            
-        user_id = update.effective_user.id if update.effective_user else "Unknown"
-        chat_id = update.effective_chat.id if update.effective_chat else "Unknown"
+        # Get user and chat information
+        user_id = update.effective_user.id
+        username = update.effective_user.username or update.effective_user.first_name or "Unknown"
+        chat_id = update.effective_chat.id
+        chat_title = getattr(update.effective_chat, 'title', 'Private Chat')
         
-        # Get the payment text from command arguments
+        # Check if arguments are provided
         if not context.args:
-            help_text = (
+            help_message = (
                 "💰 **Add Payment Command**\n\n"
                 "**Usage:**\n"
                 "• `/add $100` - Add USD payment\n"
@@ -46,53 +43,58 @@ async def add_payment_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "• `/add ៛100,000`\n"
                 "• `/add Received $50 payment`"
             )
-            await update.message.reply_text(help_text, parse_mode='Markdown')
+            await update.message.reply_text(help_message, parse_mode='Markdown')
             return
-            
-        # Join all arguments to form the payment text
-        payment_text = " ".join(context.args)
         
-        logger.info(f"Manual payment addition by user {user_id} in chat {chat_id}: {payment_text}")
+        # Join all arguments into a single text
+        text = " ".join(context.args)
         
-        # Extract amounts from the command text
-        usd_amount, riel_amount = extract_amounts(payment_text)
+        logger.info(f"Manual payment addition by user {user_id} in chat {chat_id}: {text}")
         
-        if usd_amount > 0 or riel_amount > 0:
-            username = update.effective_user.username or update.effective_user.first_name or "Unknown"
-            chat_title = update.effective_chat.title or "Private Chat"
-            
-            payment_id = add_payment(
-                user_id=user_id,
-                username=username,
-                chat_id=chat_id,
-                chat_title=chat_title,
-                message_text=f"Manual entry: {payment_text}",
-                usd_amount=usd_amount,
-                riel_amount=riel_amount
-            )
-            
-            # Send confirmation showing what was added and current totals
-            from currency_extractor import get_totals
-            current_usd, current_riel = get_totals(chat_id, 'today')
-            
-            detected_msg = f"✅ **Payment Added:**\n"
-            if usd_amount > 0:
-                detected_msg += f"💵 ${usd_amount:.2f} USD\n"
-            if riel_amount > 0:
-                detected_msg += f"🏛️ ៛{riel_amount:,.2f} KHR\n"
-            
-            totals_msg = f"\n📊 **Today's Total:**\n💵 ${current_usd:.2f} USD\n🏛️ ៛{current_riel:,.2f} KHR"
-            
-            await update.message.reply_text(detected_msg + totals_msg, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(
+        # Extract currency amounts
+        usd_amount, riel_amount = extract_amounts(text)
+        
+        # Check if any amount was detected
+        if usd_amount == 0 and riel_amount == 0:
+            error_message = (
                 "❌ No payment amounts detected in your text.\n\n"
-                "Try: `/add $100` or `/add ៛25000`",
-                parse_mode='Markdown'
+                "Try: `/add $100` or `/add ៛25000`"
             )
-            
+            await update.message.reply_text(error_message)
+            return
+        
+        # Add payment to database
+        payment_id = add_payment(
+            user_id=user_id,
+            username=username,
+            chat_id=chat_id,
+            chat_title=chat_title,
+            message_text=f"Manual entry: {text}",
+            usd_amount=usd_amount,
+            riel_amount=riel_amount
+        )
+        
+        # Get updated totals for today
+        from currency_extractor import get_totals
+        current_usd, current_riel = get_totals(chat_id, 'today')
+        
+        # Create response message
+        response_parts = ["✅ **Payment Added:**"]
+        
+        if usd_amount > 0:
+            response_parts.append(f"💵 ${usd_amount:.2f} USD")
+        if riel_amount > 0:
+            response_parts.append(f"🏛️ ៛{riel_amount:,.2f} KHR")
+        
+        response_parts.append(f"\n📊 **Today's Total:**")
+        response_parts.append(f"💵 ${current_usd:.2f} USD")
+        response_parts.append(f"🏛️ ៛{current_riel:,.2f} KHR")
+        
+        response_message = "\n".join(response_parts)
+        await update.message.reply_text(response_message, parse_mode='Markdown')
+        
     except Exception as e:
-        logger.error(f"Error adding manual payment: {e}")
+        logger.error(f"Error in add_payment_command: {e}")
         await update.message.reply_text("❌ Error adding payment. Please try again.")
 
 async def show_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -104,21 +106,21 @@ async def show_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
-        if not update.message:
-            return
-            
-        user_id = update.effective_user.id if update.effective_user else "Unknown"
-        chat_id = update.effective_chat.id if update.effective_chat else "Unknown"
-        chat_type = update.effective_chat.type if update.effective_chat else "Unknown"
+        user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
+        chat_type = update.effective_chat.type
+        
         logger.info(f"Total command requested by user {user_id} in chat {chat_id} (type: {chat_type})")
         
+        # Get today's totals
         totals_text = format_totals(chat_id, 'today')
+        
         await update.message.reply_text(totals_text, parse_mode='Markdown')
         logger.info(f"Successfully sent totals response to chat {chat_id}")
         
     except Exception as e:
-        logger.error(f"Error showing totals: {e}")
-        await update.message.reply_text("❌ Sorry, there was an error retrieving the totals.")
+        logger.error(f"Error in show_total: {e}")
+        await update.message.reply_text("❌ Error retrieving totals. Please try again.")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -129,30 +131,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
-        if not update.message:
-            return
-            
-        # Check if this is a group chat to provide privacy setup guidance
-        is_group = update.effective_chat.type in ['group', 'supergroup']
-        
         welcome_message = (
-            "🤖 **Payment Tracking Bot**\n\n"
-            "I track payment amounts through manual commands with persistent database storage and comprehensive reporting!\n\n"
-            "**Supported currencies:**\n"
-            "💵 USD: $10.50\n"
-            "🏛️ KHR: ៛25,000\n\n"
-            "**Commands:**\n"
-            "• /add $100 - Add a payment manually\n"
-            "• /total - Show today's totals\n"
-            "• /week - Show weekly totals\n"
-            "• /month - Show monthly totals\n"
-            "• /year - Show yearly totals\n"
-            "• /summary - Detailed daily summary\n"
-            "• /export [period] - Export to Excel (week/month/year/all)\n"
-            "• /help - Show this help message\n\n"
-            "**Features:**\n"
-            "📊 Persistent database storage\n"
-            "🔒 Multi-chat support\n"
+            "🤖 **Biomed Payment Bot**\n\n"
+            "I help track your payment amounts with support for:\n"
+            "💵 USD ($100, $50.25)\n"
+            "🏛️ Cambodian Riel (៛25000, ៛100,000)\n\n"
+            "✨ **Features:**\n"
+            "📊 Daily/weekly/monthly totals\n"
+            "🔄 Automatic currency detection\n"
             "📈 Historical tracking\n"
             "📋 Excel export functionality\n\n"
         )
@@ -170,6 +156,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         
     except Exception as e:
         logger.error(f"Error in start command: {e}")
+        await update.message.reply_text("❌ Error showing welcome message.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -179,7 +166,33 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         update (Update): Telegram update object
         context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
-    await start_command(update, context)
+    try:
+        help_text = (
+            "🤖 **Payment Bot Commands**\n\n"
+            "**Basic Commands:**\n"
+            "• `/start` - Welcome message\n"
+            "• `/add $100` - Add payment manually\n"
+            "• `/total` - Show today's totals\n"
+            "• `/help` - Show this help\n\n"
+            "**Time Period Commands:**\n"
+            "• `/week` - This week's totals\n"
+            "• `/month` - This month's totals\n"
+            "• `/year` - This year's totals\n"
+            "• `/summary` - Detailed daily summary\n\n"
+            "**Export & Testing:**\n"
+            "• `/export` - Export to Excel\n"
+            "• `/test [text]` - Test payment detection\n\n"
+            "**Supported Formats:**\n"
+            "💵 USD: $100, $50.25, 100$\n"
+            "🏛️ KHR: ៛25000, ៛100,000, 25000៛\n"
+            "📱 ABA: \"$272.50 paid by...\""
+        )
+        
+        await update.message.reply_text(help_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in help command: {e}")
+        await update.message.reply_text("❌ Error showing help.")
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -190,18 +203,18 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
-        if not update.message:
-            return
-            
-        from currency_extractor import get_totals
-        from datetime import datetime
-        
         chat_id = update.effective_chat.id
-        current_usd, current_riel = get_totals(chat_id, 'today')
-        today = datetime.now().strftime('%B %d, %Y')
         
-        summary_text = f"📋 **Daily Payment Summary**\n"
-        summary_text += f"📅 Date: {today}\n\n"
+        # Get today's totals
+        from currency_extractor import get_totals
+        current_usd, current_riel = get_totals(chat_id, 'today')
+        
+        # Get current date
+        from database import get_cambodia_date
+        today = get_cambodia_date()
+        
+        summary_text = f"📊 **Daily Payment Summary**\n"
+        summary_text += f"📅 Date: {today.strftime('%B %d, %Y')}\n\n"
         summary_text += f"💰 **Total Payments:**\n"
         summary_text += f"💵 USD: ${current_usd:.2f}\n"
         summary_text += f"🏛️ KHR: ៛{current_riel:,.2f}\n\n"
@@ -214,69 +227,53 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(summary_text, parse_mode='Markdown')
         
     except Exception as e:
-        logger.error(f"Error showing summary: {e}")
-        await update.message.reply_text("❌ Sorry, there was an error generating the summary.")
+        logger.error(f"Error in summary command: {e}")
+        await update.message.reply_text("❌ Error generating summary.")
 
 async def weekly_totals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /week command to display weekly totals."""
     try:
-        if not update.message:
-            return
-        
         chat_id = update.effective_chat.id
         totals_text = format_totals(chat_id, 'week')
         await update.message.reply_text(totals_text, parse_mode='Markdown')
-        
     except Exception as e:
-        logger.error(f"Error showing weekly totals: {e}")
-        await update.message.reply_text("❌ Sorry, there was an error retrieving weekly totals.")
+        logger.error(f"Error in weekly_totals: {e}")
+        await update.message.reply_text("❌ Error retrieving weekly totals.")
 
 async def monthly_totals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /month command to display monthly totals."""
     try:
-        if not update.message:
-            return
-        
         chat_id = update.effective_chat.id
         totals_text = format_totals(chat_id, 'month')
         await update.message.reply_text(totals_text, parse_mode='Markdown')
-        
     except Exception as e:
-        logger.error(f"Error showing monthly totals: {e}")
-        await update.message.reply_text("❌ Sorry, there was an error retrieving monthly totals.")
+        logger.error(f"Error in monthly_totals: {e}")
+        await update.message.reply_text("❌ Error retrieving monthly totals.")
 
 async def yearly_totals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /year command to display yearly totals."""
     try:
-        if not update.message:
-            return
-        
         chat_id = update.effective_chat.id
         totals_text = format_totals(chat_id, 'year')
         await update.message.reply_text(totals_text, parse_mode='Markdown')
-        
     except Exception as e:
-        logger.error(f"Error showing yearly totals: {e}")
-        await update.message.reply_text("❌ Sorry, there was an error retrieving yearly totals.")
+        logger.error(f"Error in yearly_totals: {e}")
+        await update.message.reply_text("❌ Error retrieving yearly totals.")
 
 async def export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /export command to export payments to Excel."""
     try:
-        if not update.message:
-            return
-        
         chat_id = update.effective_chat.id
-        chat_title = update.effective_chat.title or "Private Chat"
+        chat_title = getattr(update.effective_chat, 'title', 'Private_Chat')
         
-        # Default to monthly export, allow period specification
-        period = 'month'
+        # Determine period from command arguments
+        period = 'month'  # default
         if context.args:
-            period_arg = context.args[0].lower()
-            if period_arg in ['week', 'month', 'year', 'all']:
-                period = period_arg
+            arg = context.args[0].lower()
+            if arg in ['week', 'month', 'year', 'all']:
+                period = arg
         
-        await update.message.reply_text("🔄 Generating Excel export... Please wait.")
-        
+        # Generate Excel file
         filename = export_payments(chat_id, chat_title, period)
         
         if filename:
@@ -285,58 +282,58 @@ async def export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await update.message.reply_document(
                     document=file,
                     filename=filename,
-                    caption=f"📊 Payment export for {period} period\n"
-                           f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    caption=f"📊 Payment export for {period}"
                 )
             
             # Clean up the file
             import os
             os.remove(filename)
         else:
-            await update.message.reply_text("❌ Failed to generate export or no payments found for the specified period.")
-        
+            await update.message.reply_text("❌ No payments found for export.")
+            
     except Exception as e:
-        logger.error(f"Error exporting to Excel: {e}")
-        await update.message.reply_text("❌ Sorry, there was an error generating the export.")
+        logger.error(f"Error in export_excel: {e}")
+        await update.message.reply_text("❌ Error exporting payments.")
 
 async def test_detection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /test command to test payment detection manually."""
     try:
-        if not update.message:
-            return
-        
         if not context.args:
-            await update.message.reply_text(
-                "📝 **Test Payment Detection**\n\n"
-                "Usage: `/test <message>`\n\n"
-                "Examples:\n"
-                "• `/test I paid $50.25 for lunch`\n"
-                "• `/test Cost was ៛25,000 for taxi`\n"
-                "• `/test Total: $100.00 and ៛5,000`"
+            test_message = (
+                "🧪 **Test Payment Detection**\n\n"
+                "Usage: `/test [your text]`\n\n"
+                "Example: `/test I paid $50 for lunch`\n"
+                "This will show what amounts would be detected without saving them."
             )
+            await update.message.reply_text(test_message, parse_mode='Markdown')
             return
         
-        test_message = " ".join(context.args)
-        from currency_extractor import extract_amounts
+        # Join arguments to form test text
+        test_text = " ".join(context.args)
         
-        usd_amount, riel_amount = extract_amounts(test_message)
+        # Extract amounts without saving
+        usd_amount, riel_amount = extract_amounts(test_text)
         
-        result_text = f"🔍 **Detection Test Results**\n\n"
-        result_text += f"**Input:** {test_message}\n\n"
-        result_text += f"**Detected:**\n"
-        result_text += f"💵 USD: ${usd_amount:.2f}\n"
-        result_text += f"🏛️ KHR: ៛{riel_amount:,.2f}\n\n"
+        # Format response
+        response = f"🧪 **Detection Test Results:**\n\n"
+        response += f"📝 **Input:** {test_text}\n\n"
+        response += f"💰 **Detected Amounts:**\n"
         
-        if usd_amount > 0 or riel_amount > 0:
-            result_text += "✅ **Detection successful!** This message would be tracked."
+        if usd_amount > 0:
+            response += f"💵 USD: ${usd_amount:.2f}\n"
+        if riel_amount > 0:
+            response += f"🏛️ KHR: ៛{riel_amount:,.2f}\n"
+        
+        if usd_amount == 0 and riel_amount == 0:
+            response += "❌ No amounts detected\n"
         else:
-            result_text += "❌ **No amounts detected.** This message would be ignored."
+            response += f"\n✅ Detection successful!"
         
-        await update.message.reply_text(result_text, parse_mode='Markdown')
+        await update.message.reply_text(response, parse_mode='Markdown')
         
     except Exception as e:
-        logger.error(f"Error in test detection: {e}")
-        await update.message.reply_text("❌ Sorry, there was an error testing the detection.")
+        logger.error(f"Error in test_detection: {e}")
+        await update.message.reply_text("❌ Error testing detection.")
 
 def setup_handlers(app: Application) -> None:
     """
@@ -358,5 +355,4 @@ def setup_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("test", test_detection))
     
     # No automatic message handler - only respond to commands
-    
-    logger.info("All command handlers registered successfully")
+    logger.info("Command handlers setup complete - bot operates in command-only mode")
