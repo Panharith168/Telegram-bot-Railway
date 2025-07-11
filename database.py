@@ -11,8 +11,20 @@ from psycopg2.extras import RealDictCursor
 from datetime import datetime, date
 from typing import List, Dict, Tuple, Optional
 import pandas as pd
+import pytz
 
 logger = logging.getLogger(__name__)
+
+# Cambodia timezone (UTC+7)
+CAMBODIA_TZ = pytz.timezone('Asia/Phnom_Penh')
+
+def get_cambodia_date():
+    """Get current date in Cambodia timezone."""
+    return datetime.now(CAMBODIA_TZ).date()
+
+def get_cambodia_datetime():
+    """Get current datetime in Cambodia timezone."""
+    return datetime.now(CAMBODIA_TZ)
 
 class PaymentDatabase:
     def __init__(self):
@@ -98,7 +110,7 @@ class PaymentDatabase:
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (user_id, username, chat_id, chat_title, message_text, 
-                      usd_amount, riel_amount, date.today()))
+                      usd_amount, riel_amount, get_cambodia_date()))
                 
                 payment_id = cursor.fetchone()[0]
                 logger.info(f"Added payment {payment_id}: ${usd_amount:.2f} USD, ៛{riel_amount:.2f} KHR")
@@ -116,25 +128,28 @@ class PaymentDatabase:
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
                         WHERE chat_id = %s AND payment_date = %s
-                    """, (chat_id, date.today()))
+                    """, (chat_id, get_cambodia_date()))
                 elif period == 'week':
+                    week_start = get_cambodia_date() - pd.Timedelta(days=7)
                     cursor.execute("""
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
-                        WHERE chat_id = %s AND payment_date >= CURRENT_DATE - INTERVAL '7 days'
-                    """, (chat_id,))
+                        WHERE chat_id = %s AND payment_date >= %s
+                    """, (chat_id, week_start))
                 elif period == 'month':
+                    month_start = get_cambodia_date().replace(day=1)
                     cursor.execute("""
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
-                        WHERE chat_id = %s AND payment_date >= DATE_TRUNC('month', CURRENT_DATE)
-                    """, (chat_id,))
+                        WHERE chat_id = %s AND payment_date >= %s
+                    """, (chat_id, month_start))
                 elif period == 'year':
+                    year_start = get_cambodia_date().replace(month=1, day=1)
                     cursor.execute("""
                         SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
                         FROM payments 
-                        WHERE chat_id = %s AND payment_date >= DATE_TRUNC('year', CURRENT_DATE)
-                    """, (chat_id,))
+                        WHERE chat_id = %s AND payment_date >= %s
+                    """, (chat_id, year_start))
                 
                 result = cursor.fetchone()
                 return float(result[0]), float(result[1])
@@ -172,16 +187,16 @@ class PaymentDatabase:
     def export_to_excel(self, chat_id: int, chat_title: str, period: str = 'all') -> str:
         """Export payments to Excel file."""
         try:
-            # Determine date range based on period
+            # Determine date range based on period using Cambodia timezone
             start_date = None
-            end_date = date.today()
+            end_date = get_cambodia_date()
             
             if period == 'week':
-                start_date = date.today() - pd.Timedelta(days=7)
+                start_date = get_cambodia_date() - pd.Timedelta(days=7)
             elif period == 'month':
-                start_date = date.today().replace(day=1)
+                start_date = get_cambodia_date().replace(day=1)
             elif period == 'year':
-                start_date = date.today().replace(month=1, day=1)
+                start_date = get_cambodia_date().replace(month=1, day=1)
             
             # Get payment data
             payments = self.get_payments_for_export(chat_id, start_date, end_date)
@@ -194,8 +209,8 @@ class PaymentDatabase:
             df['usd_amount'] = df['usd_amount'].astype(float)
             df['riel_amount'] = df['riel_amount'].astype(float)
             
-            # Format filename
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            # Format filename with Cambodia timezone
+            timestamp = get_cambodia_datetime().strftime('%Y%m%d_%H%M%S')
             safe_title = "".join(c for c in chat_title if c.isalnum() or c in (' ', '-', '_')).strip()
             filename = f"payments_{safe_title}_{period}_{timestamp}.xlsx"
             
@@ -210,7 +225,7 @@ class PaymentDatabase:
                     'Total USD': [df['usd_amount'].sum()],
                     'Total KHR': [df['riel_amount'].sum()],
                     'Number of Payments': [len(df)],
-                    'Export Date': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+                    'Export Date': [get_cambodia_datetime().strftime('%Y-%m-%d %H:%M:%S')]
                 }
                 summary_df = pd.DataFrame(summary_data)
                 summary_df.to_excel(writer, sheet_name='Summary', index=False)
