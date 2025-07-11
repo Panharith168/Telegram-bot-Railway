@@ -7,9 +7,8 @@ and maintains running totals using database storage.
 
 import re
 import logging
-from datetime import datetime
 from typing import Tuple
-from database import get_database, get_cambodia_date, get_cambodia_datetime
+from database import get_database
 
 logger = logging.getLogger(__name__)
 
@@ -27,70 +26,79 @@ def extract_amounts(text: str) -> Tuple[float, float]:
     Returns:
         Tuple[float, float]: (usd_amount, riel_amount)
     """
+    usd_amount = 0.0
+    riel_amount = 0.0
+    
+    # Clean the text
+    text = text.strip()
+    
     try:
-        usd_amount = 0.0
-        riel_amount = 0.0
-        
-        # Try specific ABA transaction patterns first (highest priority)
-        # ABA USD format: "$272.50 paid by"
-        aba_usd_match = re.search(r'"?\$([0-9,]+(?:\.\d{1,2})?)\s+paid\s+by', text, re.IGNORECASE)
-        if aba_usd_match:
-            usd_amount = float(aba_usd_match.group(1).replace(',', ''))
-            logger.info(f"Detected ABA USD transaction: ${usd_amount:.2f}")
-            return usd_amount, 0.0
-        
-        # ABA KHR format: "៛370,300 paid by"
-        aba_khr_match = re.search(r'"?៛([0-9,]+(?:\.\d{1,2})?)\s+paid\s+by', text, re.IGNORECASE)
-        if aba_khr_match:
-            riel_amount = float(aba_khr_match.group(1).replace(',', ''))
-            logger.info(f"Detected ABA KHR transaction: ៛{riel_amount:,.2f}")
-            return 0.0, riel_amount
-        
-        # ABA KHR received format: "Received 110,000 KHR"
-        aba_received_match = re.search(r'Received\s+([0-9,]+(?:\.\d{1,2})?)\s+KHR', text, re.IGNORECASE)
-        if aba_received_match:
-            riel_amount = float(aba_received_match.group(1).replace(',', ''))
-            logger.info(f"Detected ABA received KHR: ៛{riel_amount:,.2f}")
-            return 0.0, riel_amount
-        
-        # Standard USD patterns (fallback)
+        # USD patterns - Enhanced for ABA transactions
         usd_patterns = [
-            r'\$([0-9,]+(?:\.\d{1,2})?)',  # $100, $100.50, $1,000.50
-            r'([0-9,]+(?:\.\d{1,2})?)\$',  # 100$, 100.50$, 1,000.50$
-            r'([0-9,]+(?:\.\d{1,2})?)\s*(?:USD|usd|dollars?|Dollars?)',  # 100 USD, 100 dollars
-            r'USD?\s*([0-9,]+(?:\.\d{1,2})?)',  # USD 100, USD100
+            # Standard formats
+            r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',  # $100, $1,000.50
+            r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\$',  # 100$, 1000.50$
+            r'\$(\d+(?:\.\d{2})?)',  # $100.50, $100
+            r'(\d+(?:\.\d{2})?)\$',  # 100.50$, 100$
+            
+            # ABA transaction formats
+            r'\$(\d+(?:\.\d{2})?)\s+paid\s+by',  # $272.50 paid by
+            r'paid\s+\$(\d+(?:\.\d{2})?)',  # paid $272.50
+            r'Received\s+\$(\d+(?:\.\d{2})?)',  # Received $100
+            r'Transfer\s+\$(\d+(?:\.\d{2})?)',  # Transfer $50
+            
+            # Word-based patterns
+            r'(\d+(?:\.\d{2})?)\s+USD',  # 100.50 USD
+            r'(\d+(?:\.\d{2})?)\s+dollars?',  # 100 dollars
+            r'USD\s+(\d+(?:\.\d{2})?)',  # USD 100.50
+            r'dollars?\s+(\d+(?:\.\d{2})?)',  # dollars 100
         ]
         
         for pattern in usd_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
-                amount = float(match.replace(',', ''))
-                usd_amount += amount
-                logger.debug(f"Found USD amount: {amount} from pattern {pattern}")
+                try:
+                    # Remove commas and convert to float
+                    amount = float(match.replace(',', ''))
+                    if amount > usd_amount:  # Take the largest amount found
+                        usd_amount = amount
+                        logger.info(f"Detected ABA USD transaction: ${amount}")
+                except ValueError:
+                    continue
         
-        # Standard Cambodian Riel patterns (fallback)
+        # Cambodian Riel patterns
         riel_patterns = [
-            r'៛([0-9,]+(?:\.\d{1,2})?)',  # ៛25000, ៛25,000.50
-            r'([0-9,]+(?:\.\d{1,2})?)៛',  # 25000៛, 25,000.50៛
-            r'([0-9,]+(?:\.\d{1,2})?)\s*(?:KHR|khr|riel|Riel|riels|Riels)',  # 25000 KHR, 25000 riel
-            r'(?:KHR|khr|riel|Riel)\s*([0-9,]+(?:\.\d{1,2})?)',  # KHR 25000, riel 25000
+            r'៛(\d{1,3}(?:,\d{3})*)',  # ៛25,000
+            r'(\d{1,3}(?:,\d{3})*)៛',  # 25,000៛
+            r'៛(\d+)',  # ៛25000
+            r'(\d+)៛',  # 25000៛
+            r'(\d{1,3}(?:,\d{3})*)\s+riel',  # 25,000 riel
+            r'(\d{1,3}(?:,\d{3})*)\s+KHR',  # 25,000 KHR
+            r'riel\s+(\d{1,3}(?:,\d{3})*)',  # riel 25,000
+            r'KHR\s+(\d{1,3}(?:,\d{3})*)',  # KHR 25,000
+            r'Received\s+(\d{1,3}(?:,\d{3})*)\s+KHR',  # Received 110,000 KHR
         ]
         
         for pattern in riel_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
-                amount = float(match.replace(',', ''))
-                riel_amount += amount
-                logger.debug(f"Found KHR amount: {amount} from pattern {pattern}")
+                try:
+                    # Remove commas and convert to float
+                    amount = float(match.replace(',', ''))
+                    if amount > riel_amount:  # Take the largest amount found
+                        riel_amount = amount
+                        logger.info(f"Detected Riel amount: ៛{amount}")
+                except ValueError:
+                    continue
         
+        # Log the extraction result
         if usd_amount > 0 or riel_amount > 0:
-            logger.info(f"Extracted amounts from '{text}' - USD: ${usd_amount:.2f}, KHR: ៛{riel_amount:,.2f}")
-        
-        return usd_amount, riel_amount
+            logger.info(f"Extracted from '{text}': ${usd_amount} USD, ៛{riel_amount} KHR")
         
     except Exception as e:
-        logger.error(f"Error extracting amounts from text '{text}': {e}")
-        return 0.0, 0.0
+        logger.error(f"Error extracting amounts from '{text}': {e}")
+    
+    return usd_amount, riel_amount
 
 def add_payment(user_id: int, username: str, chat_id: int, chat_title: str, 
                message_text: str, usd_amount: float, riel_amount: float) -> int:
@@ -111,16 +119,20 @@ def add_payment(user_id: int, username: str, chat_id: int, chat_title: str,
     """
     try:
         db = get_database()
-        payment_id = db.add_payment(user_id, username, chat_id, chat_title, 
-                                   message_text, usd_amount, riel_amount)
-        
-        if usd_amount > 0 or riel_amount > 0:
-            logger.info(f"Added payment {payment_id} - USD: ${usd_amount:.2f}, KHR: ៛{riel_amount:.2f}")
-        
+        payment_id = db.add_payment(
+            user_id=user_id,
+            username=username,
+            chat_id=chat_id,
+            chat_title=chat_title,
+            message_text=message_text,
+            usd_amount=usd_amount,
+            riel_amount=riel_amount
+        )
+        logger.info(f"Payment added successfully: ID {payment_id}")
         return payment_id
     except Exception as e:
-        logger.error(f"Error adding payment: {e}")
-        return 0
+        logger.error(f"Failed to add payment: {e}")
+        raise
 
 def get_totals(chat_id: int, period: str = 'today') -> Tuple[float, float]:
     """
@@ -137,15 +149,14 @@ def get_totals(chat_id: int, period: str = 'today') -> Tuple[float, float]:
         db = get_database()
         return db.get_totals(chat_id, period)
     except Exception as e:
-        logger.error(f"Error getting totals: {e}")
+        logger.error(f"Failed to get totals: {e}")
         return 0.0, 0.0
 
 def reset_totals() -> None:
     """
     Reset function kept for scheduler compatibility (no longer needed with database).
     """
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    logger.info(f"[{timestamp}] Daily reset check completed - using database storage")
+    logger.info("Reset function called (no action needed with database storage)")
 
 def format_totals(chat_id: int, period: str = 'today') -> str:
     """
@@ -160,12 +171,24 @@ def format_totals(chat_id: int, period: str = 'today') -> str:
     """
     try:
         usd_total, riel_total = get_totals(chat_id, period)
-        period_text = period.title()
         
-        return f"📊 **{period_text}'s Totals:**\n💵 USD: ${usd_total:.2f}\n🏛️ KHR: ៛{riel_total:,.2f}"
+        period_names = {
+            'today': "Today's",
+            'week': "This Week's",
+            'month': "This Month's", 
+            'year': "This Year's"
+        }
+        
+        period_display = period_names.get(period, period.title())
+        
+        formatted = f"📊 **{period_display} Totals:**\n"
+        formatted += f"💵 USD: ${usd_total:.2f}\n"
+        formatted += f"🏛️ KHR: ៛{riel_total:,.2f}"
+        
+        return formatted
     except Exception as e:
         logger.error(f"Error formatting totals: {e}")
-        return f"❌ Error retrieving {period} totals"
+        return "❌ Error retrieving totals"
 
 def export_payments(chat_id: int, chat_title: str, period: str = 'month') -> str:
     """
@@ -181,8 +204,7 @@ def export_payments(chat_id: int, chat_title: str, period: str = 'month') -> str
     """
     try:
         db = get_database()
-        filename = db.export_to_excel(chat_id, chat_title, period)
-        return filename
+        return db.export_to_excel(chat_id, chat_title, period)
     except Exception as e:
-        logger.error(f"Error exporting payments: {e}")
+        logger.error(f"Failed to export payments: {e}")
         return None

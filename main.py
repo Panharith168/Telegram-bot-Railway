@@ -1,94 +1,108 @@
-#!/usr/bin/env python3
 """
-Telegram Payment Tracking Bot
+Telegram Payment Tracking Bot - Railway Fixed Version
 
-A bot that automatically extracts and sums payment amounts from chat messages
-with support for multiple currencies (USD and Cambodian Riel).
+A bot that tracks payment amounts via manual commands with persistent database storage.
 """
 
-import logging
 import os
 import sys
+import logging
+import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram.ext import ApplicationBuilder
-from apscheduler.schedulers.background import BackgroundScheduler
 
-from bot_handlers import setup_handlers
-from currency_extractor import reset_totals
-from database import get_database
+# Load environment variables
+load_dotenv()
 
-# Configure logging
+# Configure logging for Railway
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('bot.log')
+        logging.StreamHandler(sys.stdout)  # Log to stdout for Railway
     ]
 )
 logger = logging.getLogger(__name__)
 
-def health_check():
-    """Periodic health check for 24/7 monitoring"""
+def validate_environment():
+    """Validate required environment variables."""
+    bot_token = os.getenv('BOT_TOKEN')
+    if not bot_token:
+        logger.error("BOT_TOKEN not found in environment variables")
+        return False
+    
+    # Check database credentials
+    database_url = os.getenv('DATABASE_URL')
+    pghost = os.getenv('PGHOST')
+    
+    if not database_url and not pghost:
+        logger.error("No database credentials found")
+        return False
+    
+    logger.info("Environment validation passed")
+    return True
+
+async def health_check():
+    """Simple health check for Railway monitoring."""
     try:
         # Test database connection
+        from database import get_database
         db = get_database()
-        db.connect()
-        logger.info(f"✅ Bot health check passed - {datetime.now()}")
+        logger.info("Health check passed - database connection OK")
+        return True
     except Exception as e:
-        logger.error(f"❌ Health check failed: {e}")
+        logger.error(f"Health check failed: {e}")
+        return False
 
 def main():
     """Main function to initialize and run the Telegram bot."""
-    # Load environment variables
-    load_dotenv()
-    bot_token = os.getenv("BOT_TOKEN")
+    logger.info("Starting Telegram Payment Tracking Bot")
     
-    if not bot_token:
-        logger.error("BOT_TOKEN not found in environment variables")
+    # Validate environment
+    if not validate_environment():
+        logger.error("Environment validation failed - exiting")
         sys.exit(1)
-    
-    logger.info("Starting Payment Tracking Bot...")
     
     try:
-        # Create application
-        app = ApplicationBuilder().token(bot_token).build()
+        # Import after environment validation
+        from telegram.ext import Application
+        from bot_handlers import setup_handlers
         
-        # Setup message and command handlers
-        setup_handlers(app)
+        # Get bot token
+        bot_token = os.getenv('BOT_TOKEN')
+        logger.info("Initializing Telegram bot application")
         
-        # Setup daily reset scheduler
-        scheduler = BackgroundScheduler()
-        scheduler.add_job(
-            reset_totals, 
-            'cron', 
-            hour=0, 
-            minute=0,
-            id='daily_reset'
+        # Create application with explicit settings for Railway
+        application = (
+            Application.builder()
+            .token(bot_token)
+            .concurrent_updates(True)
+            .build()
         )
-        # Add health check every 30 minutes for 24/7 monitoring
-        scheduler.add_job(
-            health_check,
-            'interval',
-            minutes=30,
-            id='health_check'
-        )
-        scheduler.start()
-        logger.info("Daily reset scheduler started (midnight UTC)")
-        logger.info("Health check scheduler started (every 30 minutes)")
+        
+        # Setup all command handlers
+        setup_handlers(application)
+        logger.info("Bot handlers configured successfully")
+        
+        # Test database connection before starting
+        logger.info("Testing database connection...")
+        asyncio.run(health_check())
         
         # Start the bot
-        logger.info("Bot is running and listening for messages...")
-        app.run_polling(allowed_updates=['message'])
+        logger.info("Starting bot polling...")
+        application.run_polling(
+            allowed_updates=['message', 'callback_query'],
+            drop_pending_updates=True,  # Clear any pending updates
+            close_loop=False
+        )
         
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Critical error starting bot: {e}")
+        logger.error(f"Bot startup failed: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
-    finally:
-        if 'scheduler' in locals():
-            scheduler.shutdown()
-            logger.info("Scheduler shutdown complete")
 
 if __name__ == "__main__":
     main()
