@@ -16,28 +16,47 @@ from currency_extractor import extract_amounts, add_payment, format_totals, expo
 
 logger = logging.getLogger(__name__)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def add_payment_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Handle incoming text messages and extract currency amounts.
+    Handle /add command to manually add payment amounts.
+    Usage: /add $100 or /add ៛25000 or /add $50 ៛10000
     
     Args:
         update (Update): Telegram update object
         context (ContextTypes.DEFAULT_TYPE): Telegram context
     """
     try:
-        if not update.message or not update.message.text:
+        if not update.message:
             return
             
-        message_text = update.message.text
         user_id = update.effective_user.id if update.effective_user else "Unknown"
         chat_id = update.effective_chat.id if update.effective_chat else "Unknown"
         
-        logger.info(f"Processing message from user {user_id} in chat {chat_id}: {message_text}")
+        # Get the payment text from command arguments
+        if not context.args:
+            help_text = (
+                "💰 **Add Payment Command**\n\n"
+                "**Usage:**\n"
+                "• `/add $100` - Add USD payment\n"
+                "• `/add ៛25000` - Add KHR payment\n"
+                "• `/add $50 ៛10000` - Add both currencies\n"
+                "• `/add I paid $272.50 for lunch` - Parse from text\n\n"
+                "**Examples:**\n"
+                "• `/add $272.50`\n"
+                "• `/add ៛100,000`\n"
+                "• `/add Received $50 payment`"
+            )
+            await update.message.reply_text(help_text, parse_mode='Markdown')
+            return
+            
+        # Join all arguments to form the payment text
+        payment_text = " ".join(context.args)
         
-        # Extract amounts from the message
-        usd_amount, riel_amount = extract_amounts(message_text)
+        logger.info(f"Manual payment addition by user {user_id} in chat {chat_id}: {payment_text}")
         
-        # Add payment to database if any amounts found
+        # Extract amounts from the command text
+        usd_amount, riel_amount = extract_amounts(payment_text)
+        
         if usd_amount > 0 or riel_amount > 0:
             username = update.effective_user.username or update.effective_user.first_name or "Unknown"
             chat_title = update.effective_chat.title or "Private Chat"
@@ -47,30 +66,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 username=username,
                 chat_id=chat_id,
                 chat_title=chat_title,
-                message_text=message_text,
+                message_text=f"Manual entry: {payment_text}",
                 usd_amount=usd_amount,
                 riel_amount=riel_amount
             )
             
-            # Send confirmation showing what was detected and current totals
+            # Send confirmation showing what was added and current totals
             from currency_extractor import get_totals
             current_usd, current_riel = get_totals(chat_id, 'today')
             
-            detected_msg = f"💰 Detected: "
+            detected_msg = f"✅ **Payment Added:**\n"
             if usd_amount > 0:
-                detected_msg += f"${usd_amount:.2f} USD"
+                detected_msg += f"💵 ${usd_amount:.2f} USD\n"
             if riel_amount > 0:
-                if usd_amount > 0:
-                    detected_msg += f" + ៛{riel_amount:,.2f} KHR"
-                else:
-                    detected_msg += f"៛{riel_amount:,.2f} KHR"
+                detected_msg += f"🏛️ ៛{riel_amount:,.2f} KHR\n"
             
-            totals_msg = f"\n📊 Today's Total: ${current_usd:.2f} USD + ៛{current_riel:,.2f} KHR"
+            totals_msg = f"\n📊 **Today's Total:**\n💵 ${current_usd:.2f} USD\n🏛️ ៛{current_riel:,.2f} KHR"
             
-            await update.message.reply_text(detected_msg + totals_msg)
+            await update.message.reply_text(detected_msg + totals_msg, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(
+                "❌ No payment amounts detected in your text.\n\n"
+                "Try: `/add $100` or `/add ៛25000`",
+                parse_mode='Markdown'
+            )
             
     except Exception as e:
-        logger.error(f"Error handling message: {e}")
+        logger.error(f"Error adding manual payment: {e}")
+        await update.message.reply_text("❌ Error adding payment. Please try again.")
 
 async def show_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -114,11 +137,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         
         welcome_message = (
             "🤖 **Payment Tracking Bot**\n\n"
-            "I automatically track payment amounts with persistent database storage and comprehensive reporting!\n\n"
+            "I track payment amounts through manual commands with persistent database storage and comprehensive reporting!\n\n"
             "**Supported currencies:**\n"
             "💵 USD: $10.50\n"
             "🏛️ KHR: ៛25,000\n\n"
             "**Commands:**\n"
+            "• /add $100 - Add a payment manually\n"
             "• /total - Show today's totals\n"
             "• /week - Show weekly totals\n"
             "• /month - Show monthly totals\n"
@@ -133,21 +157,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "📋 Excel export functionality\n\n"
         )
         
-        if is_group:
-            welcome_message += (
-                "⚠️ **IMPORTANT FOR GROUPS:**\n"
-                "To track payments from regular messages, bot privacy must be disabled:\n\n"
-                "1. Go to @BotFather on Telegram\n"
-                "2. Send /mybots\n"
-                "3. Select this bot\n"
-                "4. Go to 'Bot Settings' → 'Group Privacy'\n"
-                "5. Select 'Disable'\n\n"
-                "Without this, I can only see commands (like /total) but not regular payment messages!"
-            )
-        else:
-            welcome_message += "Just send messages with payment amounts and I'll track them automatically!"
-        
-        await update.message.reply_text(welcome_message, parse_mode='Markdown')
+        welcome_message += (
+            "**How to use:**\n"
+            "1. Use `/add $100` to manually add payments\n"
+            "2. Use `/total` to check your totals\n"
+            "3. Use `/test` to test payment detection\n\n"
+            "**Example:**\n"
+            "`/add $272.50 paid for lunch`"
+        )
         
         await update.message.reply_text(welcome_message, parse_mode='Markdown')
         
@@ -190,9 +207,9 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         summary_text += f"🏛️ KHR: ៛{current_riel:,.2f}\n\n"
         
         if current_usd == 0 and current_riel == 0:
-            summary_text += "No payments detected today."
+            summary_text += "No payments added today.\nUse `/add $100` to add payments manually."
         else:
-            summary_text += "✅ All payments automatically tracked from your messages!"
+            summary_text += "✅ All payments added via `/add` command!"
         
         await update.message.reply_text(summary_text, parse_mode='Markdown')
         
@@ -323,7 +340,7 @@ async def test_detection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def setup_handlers(app: Application) -> None:
     """
-    Setup all message and command handlers for the bot.
+    Setup all command handlers for the bot.
     
     Args:
         app (Application): Telegram application instance
@@ -331,6 +348,7 @@ def setup_handlers(app: Application) -> None:
     # Command handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("add", add_payment_command))
     app.add_handler(CommandHandler("total", show_total))
     app.add_handler(CommandHandler("summary", summary_command))
     app.add_handler(CommandHandler("week", weekly_totals))
@@ -339,10 +357,6 @@ def setup_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("export", export_excel))
     app.add_handler(CommandHandler("test", test_detection))
     
-    # Message handler for text messages (excluding commands)
-    app.add_handler(MessageHandler(
-        filters.TEXT & (~filters.COMMAND), 
-        handle_message
-    ))
+    # No automatic message handler - only respond to commands
     
-    logger.info("All handlers registered successfully")
+    logger.info("All command handlers registered successfully")
