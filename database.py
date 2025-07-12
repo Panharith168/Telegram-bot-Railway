@@ -1,15 +1,18 @@
 """
-Ultra Simple Database - Railway Compatible
+Database operations for payment tracking
 
-Minimal database operations to avoid Railway connection issues.
+Handles all PostgreSQL database operations including payments storage,
+retrieval, and Excel export functionality.
 """
 
 import os
 import logging
+import asyncio
 import psycopg2
+from psycopg2.extras import RealDictCursor
 from urllib.parse import urlparse
-from datetime import datetime, date
-from typing import Tuple
+from datetime import datetime, date, timedelta
+from typing import List, Dict, Optional, Tuple
 import pytz
 
 logger = logging.getLogger(__name__)
@@ -17,145 +20,61 @@ logger = logging.getLogger(__name__)
 # Cambodia timezone
 CAMBODIA_TZ = pytz.timezone('Asia/Phnom_Penh')
 
+def get_cambodia_datetime():
+    """Get current datetime in Cambodia timezone."""
+    return datetime.now(CAMBODIA_TZ)
+
 def get_cambodia_date():
-    return datetime.now(CAMBODIA_TZ).date()
+    """Get current date in Cambodia timezone."""
+    return get_cambodia_datetime().date()
 
 class PaymentDatabase:
     def __init__(self):
         self.connection = None
-        self.connect()
-        self.setup_database()
+        self.connection_pool = None
     
-    def add_payment(self, user_id: int, username: str, chat_id: int, chat_title: str, 
-                   message_text: str, usd_amount: float, riel_amount: float) -> int:
-        """Add a new payment record."""
-        try:
-            with self.connection.cursor() as cursor:
-                cursor.execute("""
-                    INSERT INTO payments 
-                    (user_id, username, chat_id, chat_title, message_text, 
-                     usd_amount, riel_amount, payment_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """, (user_id, username, chat_id, chat_title, message_text, 
-                      usd_amount, riel_amount, get_cambodia_date()))
-                
-                payment_id = cursor.fetchone()[0]
-                logger.info(f"Payment added: ID {payment_id}, ${usd_amount:.2f} USD, ៛{riel_amount:.2f} KHR")
-                return payment_id
-        except Exception as e:
-            logger.error(f"Failed to add payment: {e}")
-            raise
+    async def initialize(self):
+        """Initialize database connection and setup tables."""
+        await self.connect()
+        await self.setup_tables()
     
-    def get_totals(self, chat_id: int, period: str = 'today') -> tuple:
-        """Get totals for specified period."""
-        try:
-            with self.connection.cursor() as cursor:
-                cambodia_date = get_cambodia_date()
-                
-                if period == 'today':
-                    cursor.execute("""
-                        SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
-                        FROM payments 
-                        WHERE chat_id = %s AND payment_date = %s
-                    """, (chat_id, cambodia_date))
-                elif period == 'week':
-                    import datetime
-                    week_start = cambodia_date - datetime.timedelta(days=7)
-                    cursor.execute("""
-                        SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
-                        FROM payments 
-                        WHERE chat_id = %s AND payment_date >= %s
-                    """, (chat_id, week_start))
-                elif period == 'month':
-                    month_start = cambodia_date.replace(day=1)
-                    cursor.execute("""
-                        SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
-                        FROM payments 
-                        WHERE chat_id = %s AND payment_date >= %s
-                    """, (chat_id, month_start))
-                elif period == 'year':
-                    year_start = cambodia_date.replace(month=1, day=1)
-                    cursor.execute("""
-                        SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
-                        FROM payments 
-                        WHERE chat_id = %s AND payment_date >= %s
-                    """, (chat_id, year_start))
-                
-                result = cursor.fetchone()
-                return float(result[0]), float(result[1])
-        except Exception as e:
-            logger.error(f"Failed to get totals: {e}")
-            return 0.0, 0.0
-    
-    def export_to_excel(self, chat_id: int, chat_title: str, period: str = 'month') -> str:
-        """Export payments to Excel - simplified for Railway."""
-        # For Railway deployment, we'll skip Excel export to avoid dependency issues
-        logger.info("Excel export not available in Railway deployment")
-        return None
-    
-    def connect(self):
-        """Railway database connection with multiple fallback methods."""
+    async def connect(self):
+        """Establish database connection with retry logic."""
         database_url = os.getenv('DATABASE_URL')
-        
         if not database_url:
-            raise Exception("No DATABASE_URL found")
+            raise Exception("DATABASE_URL not found")
         
-        logger.info(f"Connecting to Railway database: {database_url[:50]}...")
-        
-        try:
-            # Method 1: Direct URL connection (Railway preferred)
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                self.connection = psycopg2.connect(database_url, sslmode='require')
-                self.connection.autocommit = True
-                logger.info("Railway direct connection successful")
-                return
-            except Exception as e1:
-                logger.warning(f"Direct connection failed: {e1}")
-            
-            # Method 2: Parse URL components
-            try:
-                parsed = urlparse(database_url)
+                logger.info(f"Database connection attempt {attempt + 1}/{max_retries}")
+                
+                # Try direct URL connection first
                 self.connection = psycopg2.connect(
-                    host=parsed.hostname,
-                    database=parsed.path[1:],
-                    user=parsed.username,
-                    password=parsed.password,
-                    port=parsed.port or 5432,
-                    sslmode='require'
+                    database_url,
+                    sslmode='require',
+                    cursor_factory=RealDictCursor
                 )
                 self.connection.autocommit = True
-                logger.info("Railway parsed connection successful")
+                
+                # Test connection
+                with self.connection.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                
+                logger.info("Database connection successful")
                 return
-            except Exception as e2:
-                logger.warning(f"Parsed connection failed: {e2}")
-            
-            # Method 3: Environment variables (Railway backup)
-            try:
-                self.connection = psycopg2.connect(
-                    host=os.getenv('PGHOST'),
-                    database=os.getenv('PGDATABASE'),
-                    user=os.getenv('PGUSER'),
-                    password=os.getenv('PGPASSWORD'),
-                    port=os.getenv('PGPORT', 5432),
-                    sslmode='require'
-                )
-                self.connection.autocommit = True
-                logger.info("Railway environment connection successful")
-                return
-            except Exception as e3:
-                logger.warning(f"Environment connection failed: {e3}")
-            
-            raise Exception(f"All connection methods failed: {e1}, {e2}, {e3}")
-            
-        except Exception as e:
-            logger.error(f"Database connection completely failed: {e}")
-            raise
+                
+            except Exception as e:
+                logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
+                if attempt == max_retries - 1:
+                    raise
+                await asyncio.sleep(2)
     
-    def setup_database(self):
-        """Create table."""
+    async def setup_tables(self):
+        """Create necessary database tables."""
         try:
             with self.connection.cursor() as cursor:
+                # Create payments table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS payments (
                         id SERIAL PRIMARY KEY,
@@ -167,59 +86,221 @@ class PaymentDatabase:
                         usd_amount DECIMAL(10,2) DEFAULT 0,
                         riel_amount DECIMAL(15,2) DEFAULT 0,
                         payment_date DATE NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
                 
+                # Create indexes for better performance
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_payments_chat_date 
                     ON payments(chat_id, payment_date)
                 """)
                 
-            logger.info("Database tables ready")
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_payments_user 
+                    ON payments(user_id)
+                """)
+                
+                logger.info("Database tables created successfully")
+                
         except Exception as e:
-            logger.error(f"Table setup failed: {e}")
-            raise
+            logger.error(f"Failed to setup tables: {e}")
             raise
     
-    def add_payment(self, user_id: int, username: str, chat_id: int, chat_title: str, 
-                   message_text: str, usd_amount: float, riel_amount: float) -> int:
-        """Add payment."""
+    async def add_payment(self, user_id: int, username: str, chat_id: int, 
+                         chat_title: str, message_text: str, 
+                         usd_amount: float, riel_amount: float) -> int:
+        """Add a new payment record."""
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute("""
-                    INSERT INTO payments (user_id, chat_id, usd_amount, riel_amount, payment_date)
-                    VALUES (%s, %s, %s, %s, %s) RETURNING id
-                """, (user_id, chat_id, usd_amount, riel_amount, get_cambodia_date()))
+                    INSERT INTO payments 
+                    (user_id, username, chat_id, chat_title, message_text, 
+                     usd_amount, riel_amount, payment_date)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    user_id, username, chat_id, chat_title, message_text,
+                    usd_amount, riel_amount, get_cambodia_date()
+                ))
                 
-                payment_id = cursor.fetchone()[0]
-                logger.info(f"Payment added: ${usd_amount} USD, ៛{riel_amount} KHR")
+                payment_id = cursor.fetchone()['id']
+                logger.info(f"Payment added: ID {payment_id}, ${usd_amount:.2f} USD, ៛{riel_amount:,.0f} KHR")
                 return payment_id
+                
         except Exception as e:
-            logger.error(f"Add payment failed: {e}")
+            logger.error(f"Failed to add payment: {e}")
             raise
     
-    def get_totals(self, chat_id: int, period: str = 'today') -> Tuple[float, float]:
-        """Get totals."""
+    async def get_totals(self, chat_id: int, period: str = 'today') -> Tuple[float, float]:
+        """Get payment totals for specified period."""
         try:
             with self.connection.cursor() as cursor:
-                today = get_cambodia_date()
+                cambodia_date = get_cambodia_date()
                 
-                cursor.execute("""
-                    SELECT COALESCE(SUM(usd_amount), 0), COALESCE(SUM(riel_amount), 0)
-                    FROM payments 
-                    WHERE chat_id = %s AND payment_date = %s
-                """, (chat_id, today))
+                if period == 'today':
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(usd_amount), 0) as usd_total,
+                               COALESCE(SUM(riel_amount), 0) as riel_total
+                        FROM payments 
+                        WHERE chat_id = %s AND payment_date = %s
+                    """, (chat_id, cambodia_date))
+                
+                elif period == 'week':
+                    week_start = cambodia_date - timedelta(days=7)
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(usd_amount), 0) as usd_total,
+                               COALESCE(SUM(riel_amount), 0) as riel_total
+                        FROM payments 
+                        WHERE chat_id = %s AND payment_date >= %s
+                    """, (chat_id, week_start))
+                
+                elif period == 'month':
+                    month_start = cambodia_date.replace(day=1)
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(usd_amount), 0) as usd_total,
+                               COALESCE(SUM(riel_amount), 0) as riel_total
+                        FROM payments 
+                        WHERE chat_id = %s AND payment_date >= %s
+                    """, (chat_id, month_start))
+                
+                elif period == 'year':
+                    year_start = cambodia_date.replace(month=1, day=1)
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(usd_amount), 0) as usd_total,
+                               COALESCE(SUM(riel_amount), 0) as riel_total
+                        FROM payments 
+                        WHERE chat_id = %s AND payment_date >= %s
+                    """, (chat_id, year_start))
+                
+                else:
+                    # All time
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(usd_amount), 0) as usd_total,
+                               COALESCE(SUM(riel_amount), 0) as riel_total
+                        FROM payments 
+                        WHERE chat_id = %s
+                    """, (chat_id,))
                 
                 result = cursor.fetchone()
-                usd_total, riel_total = float(result[0]), float(result[1])
-                logger.info(f"Totals: ${usd_total} USD, ៛{riel_total} KHR")
-                return usd_total, riel_total
+                return float(result['usd_total']), float(result['riel_total'])
                 
         except Exception as e:
-            logger.error(f"Get totals failed: {e}")
+            logger.error(f"Failed to get totals: {e}")
             return 0.0, 0.0
-
-def get_database():
-    """Get database instance."""
-    return PaymentDatabase()
+    
+    async def get_daily_summary(self, chat_id: int, target_date: date = None) -> Dict:
+        """Get detailed daily summary."""
+        if target_date is None:
+            target_date = get_cambodia_date()
+        
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT 
+                        COUNT(*) as payment_count,
+                        COALESCE(SUM(usd_amount), 0) as usd_total,
+                        COALESCE(SUM(riel_amount), 0) as riel_total,
+                        ARRAY_AGG(
+                            json_build_object(
+                                'time', created_at,
+                                'user', username,
+                                'usd', usd_amount,
+                                'riel', riel_amount,
+                                'text', message_text
+                            )
+                        ) as payments
+                    FROM payments 
+                    WHERE chat_id = %s AND payment_date = %s
+                    ORDER BY created_at DESC
+                """, (chat_id, target_date))
+                
+                result = cursor.fetchone()
+                return {
+                    'date': target_date,
+                    'payment_count': result['payment_count'],
+                    'usd_total': float(result['usd_total']),
+                    'riel_total': float(result['riel_total']),
+                    'payments': result['payments'] or []
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get daily summary: {e}")
+            return {
+                'date': target_date,
+                'payment_count': 0,
+                'usd_total': 0.0,
+                'riel_total': 0.0,
+                'payments': []
+            }
+    
+    async def export_payments(self, chat_id: int, period: str = 'month') -> Optional[str]:
+        """Export payments to Excel file."""
+        try:
+            import pandas as pd
+            from datetime import datetime
+            
+            # Calculate date range
+            cambodia_date = get_cambodia_date()
+            
+            if period == 'week':
+                start_date = cambodia_date - timedelta(days=7)
+                filename = f"payments_week_{cambodia_date.strftime('%Y%m%d')}.xlsx"
+            elif period == 'month':
+                start_date = cambodia_date.replace(day=1)
+                filename = f"payments_month_{cambodia_date.strftime('%Y%m')}.xlsx"
+            elif period == 'year':
+                start_date = cambodia_date.replace(month=1, day=1)
+                filename = f"payments_year_{cambodia_date.year}.xlsx"
+            else:  # all
+                start_date = date(2020, 1, 1)  # Far past date
+                filename = f"payments_all_{cambodia_date.strftime('%Y%m%d')}.xlsx"
+            
+            # Get payments data
+            with self.connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT 
+                        payment_date,
+                        created_at,
+                        username,
+                        usd_amount,
+                        riel_amount,
+                        message_text
+                    FROM payments 
+                    WHERE chat_id = %s AND payment_date >= %s
+                    ORDER BY payment_date DESC, created_at DESC
+                """, (chat_id, start_date))
+                
+                payments = cursor.fetchall()
+            
+            if not payments:
+                return None
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(payments)
+            
+            # Format columns
+            df['usd_amount'] = df['usd_amount'].apply(lambda x: f"${float(x):.2f}")
+            df['riel_amount'] = df['riel_amount'].apply(lambda x: f"៛{float(x):,.0f}")
+            df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Rename columns
+            df.columns = ['Date', 'Time', 'User', 'USD Amount', 'KHR Amount', 'Message']
+            
+            # Save to Excel
+            df.to_excel(filename, index=False, engine='openpyxl')
+            logger.info(f"Excel export created: {filename}")
+            return filename
+            
+        except ImportError:
+            logger.warning("pandas/openpyxl not available for Excel export")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to export payments: {e}")
+            return None
+    
+    def close(self):
+        """Close database connection."""
+        if self.connection:
+            self.connection.close()
+            logger.info("Database connection closed")

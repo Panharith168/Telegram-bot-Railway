@@ -1,101 +1,74 @@
+#!/usr/bin/env python3
 """
-Telegram Payment Tracking Bot - Ultra Simple Railway Version
+Telegram Payment Tracking Bot
 
-Minimal implementation to avoid Railway crashes.
+A comprehensive Telegram bot that automatically extracts and tracks payment amounts 
+from chat messages with persistent PostgreSQL database storage, multi-currency support, 
+and Excel export functionality.
 """
 
 import os
 import sys
 import logging
+import asyncio
 from dotenv import load_dotenv
+from telegram.ext import Application
 
 # Load environment variables
 load_dotenv()
 
-# Simple logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('payment_bot.log')
+    ]
 )
 logger = logging.getLogger(__name__)
 
-def main():
-    """Ultra simple main function for Railway."""
-    logger.info("=== STARTING BOT ===")
+async def main():
+    """Main function to initialize and run the Telegram bot."""
+    logger.info("Starting Telegram Payment Tracking Bot...")
     
-    # Check environment
+    # Get bot token
     bot_token = os.getenv('BOT_TOKEN')
-    database_url = os.getenv('DATABASE_URL')
-    
-    logger.info(f"BOT_TOKEN: {'Present' if bot_token else 'Missing'}")
-    logger.info(f"DATABASE_URL: {'Present' if database_url else 'Missing'}")
-    
     if not bot_token:
-        logger.error("BOT_TOKEN missing")
+        logger.error("BOT_TOKEN not found in environment variables")
         return
     
+    # Get database URL
+    database_url = os.getenv('DATABASE_URL')
     if not database_url:
-        logger.error("DATABASE_URL missing")
+        logger.error("DATABASE_URL not found in environment variables")
         return
     
     try:
-        # Test database first with multiple attempts
-        logger.info("Testing database connection...")
+        # Initialize database
+        logger.info("Initializing database connection...")
+        from database import PaymentDatabase
+        db = PaymentDatabase()
+        await db.initialize()
+        logger.info("Database initialized successfully")
         
-        db_attempts = 0
-        max_attempts = 3
-        db = None
+        # Create application
+        logger.info("Creating Telegram application...")
+        application = Application.builder().token(bot_token).build()
         
-        while db_attempts < max_attempts:
-            try:
-                from database import PaymentDatabase
-                db = PaymentDatabase()
-                logger.info("Database connection successful!")
-                break
-            except Exception as db_error:
-                db_attempts += 1
-                logger.warning(f"Database attempt {db_attempts}/{max_attempts} failed: {db_error}")
-                if db_attempts >= max_attempts:
-                    logger.error("Database connection failed after all attempts")
-                    raise
-                import time
-                time.sleep(2)  # Wait 2 seconds before retry
+        # Setup handlers
+        from handlers import setup_handlers
+        setup_handlers(application)
+        logger.info("Handlers configured successfully")
         
-        # Import and start bot
-        logger.info("Starting Telegram bot...")
-        from telegram.ext import Application
-        from bot_handlers import setup_handlers
-        
-        app = Application.builder().token(bot_token).build()
-        setup_handlers(app)
-        
-        logger.info("Bot configured successfully, starting polling...")
-        app.run_polling(drop_pending_updates=True)
+        # Start the bot
+        logger.info("Starting bot polling...")
+        await application.run_polling(drop_pending_updates=True)
         
     except Exception as e:
-        logger.error(f"Critical error: {e}")
+        logger.error(f"Failed to start bot: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Try to continue without database for debugging
-        logger.info("Attempting to start bot without database...")
-        try:
-            from telegram.ext import Application
-            app = Application.builder().token(bot_token).build()
-            
-            # Add minimal handler
-            async def error_handler(update, context):
-                await update.message.reply_text("Bot is starting up, please try again in a moment...")
-            
-            from telegram.ext import MessageHandler, filters
-            app.add_handler(MessageHandler(filters.TEXT, error_handler))
-            
-            logger.info("Emergency bot mode starting...")
-            app.run_polling(drop_pending_updates=True)
-        except Exception as final_error:
-            logger.error(f"Complete failure: {final_error}")
-            raise
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
